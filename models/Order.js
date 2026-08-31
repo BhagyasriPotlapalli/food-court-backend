@@ -1,39 +1,55 @@
-export default (sequelize, DataTypes) => {
-  const Order = sequelize.define('Order', {
-    id: {
-      type: DataTypes.INTEGER,
-      primaryKey: true,
-      autoIncrement: true
-    },
-    cashierId: {
-      type: DataTypes.INTEGER,
-      allowNull: false
-    },
-    subtotal: {
-      type: DataTypes.DECIMAL(10, 2),
-      allowNull: false
-    },
-    tax: {
-      type: DataTypes.DECIMAL(10, 2),
-      defaultValue: 0.00
-    },
-    discount: {
-      type: DataTypes.DECIMAL(10, 2),
-      defaultValue: 0.00
-    },
-    total: {
-      type: DataTypes.DECIMAL(10, 2),
-      allowNull: false
-    },
-    paymentMethod: {
-      type: DataTypes.ENUM('Cash', 'UPI', 'Card'),
-      allowNull: false
-    },
-    status: {
-      type: DataTypes.ENUM('Completed', 'Cancelled', 'Refunded'),
-      defaultValue: 'Completed'
-    }
-  });
+import mongoose from 'mongoose';
 
-  return Order;
-};
+const orderItemSchema = new mongoose.Schema({
+  foodItem: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'FoodItem',
+    required: true
+  },
+  quantity: {
+    type: Number,
+    required: true,
+    default: 1
+  },
+  priceAtPurchase: {
+    type: Number,
+    required: true
+  }
+});
+
+const orderSchema = new mongoose.Schema({
+  cashier: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  items: [orderItemSchema],
+  subtotal: {
+    type: Number,
+    required: true
+  },
+  tax: {
+    type: Number,
+    default: 0
+  },
+  discount: {
+    type: Number,
+    default: 0
+  },
+  total: {
+    type: Number,
+    required: true
+  },
+  paymentMethod: {
+    type: String,
+    enum: ['Cash', 'UPI', 'Card'],
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['Completed', 'Cancelled', 'Refunded'],
+    default: 'Completed'
+  }
+}, { timestamps: true });
+
+export default mongoose.model('Order', orderSchema);

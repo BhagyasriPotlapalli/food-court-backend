@@ -1,27 +1,23 @@
-export default (sequelize, DataTypes) => {
-  const FoodItem = sequelize.define('FoodItem', {
-    id: {
-      type: DataTypes.INTEGER,
-      primaryKey: true,
-      autoIncrement: true
-    },
-    name: {
-      type: DataTypes.STRING,
-      allowNull: false
-    },
-    price: {
-      type: DataTypes.DECIMAL(10, 2),
-      allowNull: false
-    },
-    categoryId: {
-      type: DataTypes.INTEGER,
-      allowNull: false
-    },
-    isAvailable: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: true
-    }
-  });
+import mongoose from 'mongoose';
 
-  return FoodItem;
-};
+const foodItemSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true
+  },
+  price: {
+    type: Number,
+    required: true
+  },
+  category: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Category',
+    required: true
+  },
+  isAvailable: {
+    type: Boolean,
+    default: true
+  }
+}, { timestamps: true });
+
+export default mongoose.model('FoodItem', foodItemSchema);

@@ -1,7 +1,5 @@
 import jwt from 'jsonwebtoken';
-import db from '../models/index.js';
-
-const { User } = db;
+import User from '../models/User.js';
 
 export const verifyToken = (req, res, next) => {
   let token = req.headers['x-access-token'] || req.headers['authorization'];
@@ -26,7 +24,7 @@ export const verifyToken = (req, res, next) => {
 
 export const isAdmin = async (req, res, next) => {
   try {
-    const user = await User.findByPk(req.userId);
+    const user = await User.findById(req.userId);
     if (user && user.role === 'Admin') {
       next();
       return;
@@ -39,7 +37,7 @@ export const isAdmin = async (req, res, next) => {
 
 export const isCashier = async (req, res, next) => {
   try {
-    const user = await User.findByPk(req.userId);
+    const user = await User.findById(req.userId);
     if (user && user.role === 'Cashier') {
       next();
       return;

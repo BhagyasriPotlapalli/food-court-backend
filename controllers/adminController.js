@@ -1,9 +1,10 @@
 import bcrypt from 'bcrypt';
-import { Op } from 'sequelize';
-import db from '../models/index.js';
+import User from '../models/User.js';
+import Category from '../models/Category.js';
+import FoodItem from '../models/FoodItem.js';
+import Order from '../models/Order.js';
+import Shift from '../models/Shift.js';
 import catchAsync from '../utils/catchAsync.js';
-
-const { User, Category, FoodItem, Order, Shift } = db;
 
 // ==========================================
 // DASHBOARD & REPORTS
@@ -14,13 +15,9 @@ export const getDashboard = catchAsync(async (req, res, next) => {
   today.setHours(0, 0, 0, 0);
 
   // Get today's orders
-  const todayOrders = await Order.findAll({
-    where: {
-      createdAt: {
-        [Op.gte]: today
-      },
-      status: 'Completed'
-    }
+  const todayOrders = await Order.find({
+    createdAt: { $gte: today },
+    status: 'Completed'
   });
 
   const totalSales = todayOrders.reduce((sum, order) => sum + Number(order.total), 0);
@@ -29,10 +26,7 @@ export const getDashboard = catchAsync(async (req, res, next) => {
   const cardSales = todayOrders.filter(o => o.paymentMethod === 'Card').reduce((sum, order) => sum + Number(order.total), 0);
 
   // Active shifts
-  const activeShifts = await Shift.findAll({
-    where: { status: 'Open' },
-    include: [{ model: User, as: 'cashier', attributes: ['username'] }]
-  });
+  const activeShifts = await Shift.find({ status: 'Open' }).populate('cashier', 'username');
 
   res.status(200).json({
     summary: {
@@ -41,8 +35,8 @@ export const getDashboard = catchAsync(async (req, res, next) => {
       breakdown: { cash: cashSales, upi: upiSales, card: cardSales }
     },
     activeCashiers: activeShifts.map(shift => ({
-      shiftId: shift.id,
-      cashierName: shift.cashier.username,
+      shiftId: shift._id,
+      cashierName: shift.cashier?.username,
       openingBalance: shift.openingBalance,
       startTime: shift.startTime
     }))
@@ -56,23 +50,33 @@ export const getReports = catchAsync(async (req, res, next) => {
   
   if (startDate && endDate) {
     whereClause.createdAt = {
-      [Op.between]: [new Date(startDate), new Date(endDate)]
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
     };
   }
   if (cashierId) {
-    whereClause.cashierId = cashierId;
+    whereClause.cashier = cashierId;
   }
 
-  const orders = await Order.findAll({
-    where: whereClause,
-    include: [
-      { model: User, as: 'cashier', attributes: ['username'] },
-      { model: db.OrderItem, as: 'items', include: [{ model: FoodItem, as: 'foodItem' }] }
-    ],
-    order: [['createdAt', 'DESC']]
-  });
+  const orders = await Order.find(whereClause)
+    .populate('cashier', 'username')
+    .populate('items.foodItem')
+    .sort('-createdAt');
 
   res.status(200).json(orders);
+});
+
+export const getOrderAuditLogs = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  
+  // Note: we need to import OrderAuditLog at the top, I'll assume it will be done via another replacement or I can just dynamically import it or use mongoose.model.
+  const OrderAuditLog = (await import('../models/OrderAuditLog.js')).default;
+  
+  const logs = await OrderAuditLog.find({ order: id })
+    .populate('performedBy', 'username role')
+    .sort('-createdAt');
+
+  res.status(200).json(logs);
 });
 
 // ==========================================
@@ -82,7 +86,7 @@ export const getReports = catchAsync(async (req, res, next) => {
 export const createCashier = catchAsync(async (req, res, next) => {
   const { username, password } = req.body;
   
-  const existing = await User.findOne({ where: { username } });
+  const existing = await User.findOne({ username });
   if (existing) {
     const error = new Error('Username already exists');
     error.statusCode = 400;
@@ -98,19 +102,16 @@ export const createCashier = catchAsync(async (req, res, next) => {
     isActive: true
   });
 
-  res.status(201).json({ message: 'Cashier created successfully', cashierId: cashier.id });
+  res.status(201).json({ message: 'Cashier created successfully', cashierId: cashier._id });
 });
 
 export const getCashiers = catchAsync(async (req, res, next) => {
-  const cashiers = await User.findAll({
-    where: { role: 'Cashier' },
-    attributes: { exclude: ['password'] }
-  });
+  const cashiers = await User.find({ role: 'Cashier' }).select('-password');
   res.status(200).json(cashiers);
 });
 
 export const toggleCashierStatus = catchAsync(async (req, res, next) => {
-  const cashier = await User.findByPk(req.params.id);
+  const cashier = await User.findById(req.params.id);
   if (!cashier) {
     const error = new Error('Cashier not found');
     error.statusCode = 404;
@@ -133,25 +134,23 @@ export const createCategory = catchAsync(async (req, res, next) => {
 });
 
 export const getCategories = catchAsync(async (req, res, next) => {
-  const categories = await Category.findAll();
+  const categories = await Category.find();
   res.status(200).json(categories);
 });
 
 export const createFoodItem = catchAsync(async (req, res, next) => {
   const { name, price, categoryId } = req.body;
-  const food = await FoodItem.create({ name, price, categoryId });
+  const food = await FoodItem.create({ name, price, category: categoryId });
   res.status(201).json(food);
 });
 
 export const getFoodItems = catchAsync(async (req, res, next) => {
-  const items = await FoodItem.findAll({
-    include: [{ model: Category, as: 'category' }]
-  });
+  const items = await FoodItem.find().populate('category');
   res.status(200).json(items);
 });
 
 export const toggleFoodItemAvailability = catchAsync(async (req, res, next) => {
-  const item = await FoodItem.findByPk(req.params.id);
+  const item = await FoodItem.findById(req.params.id);
   if (!item) {
     const error = new Error('Food item not found');
     error.statusCode = 404;

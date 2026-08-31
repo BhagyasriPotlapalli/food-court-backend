@@ -1,7 +1,11 @@
-import db from '../models/index.js';
+import mongoose from 'mongoose';
+import User from '../models/User.js';
+import Category from '../models/Category.js';
+import FoodItem from '../models/FoodItem.js';
+import Order from '../models/Order.js';
+import Shift from '../models/Shift.js';
+import OrderAuditLog from '../models/OrderAuditLog.js';
 import catchAsync from '../utils/catchAsync.js';
-
-const { Category, FoodItem, Order, OrderItem, Shift } = db;
 
 // ==========================================
 // SHIFT MANAGEMENT
@@ -12,9 +16,7 @@ export const startShift = catchAsync(async (req, res, next) => {
   const cashierId = req.userId;
 
   // Check if there is already an open shift
-  const existingShift = await Shift.findOne({
-    where: { cashierId, status: 'Open' }
-  });
+  const existingShift = await Shift.findOne({ cashier: cashierId, status: 'Open' });
 
   if (existingShift) {
     const error = new Error('You already have an open shift');
@@ -23,7 +25,7 @@ export const startShift = catchAsync(async (req, res, next) => {
   }
 
   const shift = await Shift.create({
-    cashierId,
+    cashier: cashierId,
     openingBalance: openingBalance || 0,
     expectedCash: openingBalance || 0
   });
@@ -35,9 +37,7 @@ export const closeShift = catchAsync(async (req, res, next) => {
   const { actualCash } = req.body;
   const cashierId = req.userId;
 
-  const shift = await Shift.findOne({
-    where: { cashierId, status: 'Open' }
-  });
+  const shift = await Shift.findOne({ cashier: cashierId, status: 'Open' });
 
   if (!shift) {
     const error = new Error('No open shift found to close');
@@ -60,44 +60,47 @@ export const closeShift = catchAsync(async (req, res, next) => {
 // ==========================================
 
 export const getMenu = catchAsync(async (req, res, next) => {
-  // Group food items by category
-  const categories = await Category.findAll({
-    include: [
-      {
-        model: FoodItem,
-        as: 'foodItems',
-        where: { isAvailable: true },
-        required: false
+  const categories = await Category.aggregate([
+    {
+      $lookup: {
+        from: 'fooditems',
+        localField: '_id',
+        foreignField: 'category',
+        as: 'foodItems'
       }
-    ]
+    }
+  ]);
+  
+  // Filter out unavailable food items
+  const menu = categories.map(cat => {
+    cat.foodItems = cat.foodItems.filter(item => item.isAvailable);
+    return cat;
   });
-  res.status(200).json(categories);
+
+  res.status(200).json(menu);
 });
 
 export const createOrder = catchAsync(async (req, res, next) => {
   const { items, paymentMethod, tax = 0, discount = 0 } = req.body; // items: [{ foodItemId, quantity }]
   const cashierId = req.userId;
 
-  // Managed transaction: if an error is thrown, it automatically rolls back
-  const result = await db.sequelize.transaction(async (t) => {
-    // Must have an open shift
-    const shift = await Shift.findOne({
-      where: { cashierId, status: 'Open' },
-      transaction: t
-    });
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const shift = await Shift.findOne({ cashier: cashierId, status: 'Open' }).session(session);
 
     if (!shift) {
       const error = new Error('You must start a shift before placing orders');
       error.statusCode = 400;
-      throw error; // triggers rollback
+      throw error;
     }
 
     let subtotal = 0;
     const orderItemsToCreate = [];
 
-    // Calculate totals & prepare items
     for (const item of items) {
-      const foodItem = await FoodItem.findByPk(item.foodItemId, { transaction: t });
+      const foodItem = await FoodItem.findById(item.foodItemId).session(session);
       if (!foodItem || !foodItem.isAvailable) {
         const error = new Error(`Food item ${item.foodItemId} is not available`);
         error.statusCode = 400;
@@ -108,7 +111,7 @@ export const createOrder = catchAsync(async (req, res, next) => {
       subtotal += itemTotal;
 
       orderItemsToCreate.push({
-        foodItemId: foodItem.id,
+        foodItem: foodItem._id,
         quantity: item.quantity,
         priceAtPurchase: foodItem.price
       });
@@ -116,20 +119,25 @@ export const createOrder = catchAsync(async (req, res, next) => {
 
     const total = subtotal + Number(tax) - Number(discount);
 
-    // Create Order
-    const order = await Order.create({
-      cashierId,
+    const [order] = await Order.create([{
+      cashier: cashierId,
+      items: orderItemsToCreate,
       subtotal,
       tax,
       discount,
       total,
       paymentMethod,
       status: 'Completed'
-    }, { transaction: t });
+    }], { session });
 
-    // Associate Items
-    const mappedItems = orderItemsToCreate.map(i => ({ ...i, orderId: order.id }));
-    await OrderItem.bulkCreate(mappedItems, { transaction: t });
+    // Create Audit Log
+    await OrderAuditLog.create([{
+      order: order._id,
+      action: 'CREATED',
+      performedBy: cashierId,
+      details: `Order created via POS using ${paymentMethod}`,
+      newData: { total, paymentMethod, itemsCount: orderItemsToCreate.length }
+    }], { session });
 
     // Update Shift Totals
     if (paymentMethod === 'Cash') {
@@ -140,21 +148,24 @@ export const createOrder = catchAsync(async (req, res, next) => {
     } else if (paymentMethod === 'Card') {
       shift.cardSales = Number(shift.cardSales) + total;
     }
-    await shift.save({ transaction: t });
+    await shift.save({ session });
 
-    return { orderId: order.id, total };
-  });
+    await session.commitTransaction();
+    session.endSession();
 
-  res.status(201).json({ message: 'Order created successfully', orderId: result.orderId, total: result.total });
+    res.status(201).json({ message: 'Order created successfully', orderId: order._id, total });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    next(error);
+  }
 });
 
 export const getOrderHistory = catchAsync(async (req, res, next) => {
   const cashierId = req.userId;
-  const orders = await Order.findAll({
-    where: { cashierId },
-    include: [{ model: OrderItem, as: 'items', include: [{ model: FoodItem, as: 'foodItem' }] }],
-    order: [['createdAt', 'DESC']]
-  });
+  const orders = await Order.find({ cashier: cashierId })
+    .populate('items.foodItem')
+    .sort('-createdAt');
 
   res.status(200).json(orders);
 });

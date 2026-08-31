@@ -1,9 +1,7 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
-import db from "../models/index.js";
+import User from "../models/User.js";
 import catchAsync from "../utils/catchAsync.js";
-
-const { User } = db;
 
 // @desc    Auth user & get token
 // @route   POST /api/auth/login
