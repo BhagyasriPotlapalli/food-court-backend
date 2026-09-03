@@ -15,6 +15,21 @@ const userSchema = new mongoose.Schema({
     enum: ['Admin', 'Cashier'],
     default: 'Cashier'
   },
+  name: {
+    type: String
+  },
+  phoneNumber: {
+    type: String
+  },
+  accountStatus: {
+    type: String,
+    enum: ['active', 'inactive', 'suspended'],
+    default: 'active'
+  },
+  restaurantDetails: {
+    name: { type: String },
+    location: { type: String }
+  },
   isActive: {
     type: Boolean,
     default: true

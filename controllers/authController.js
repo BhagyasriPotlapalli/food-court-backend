@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import User from "../models/User.js";
+import LoginAuditLog from "../models/LoginAuditLog.js";
 import catchAsync from "../utils/catchAsync.js";
 
 // @desc    Auth user & get token
@@ -9,7 +10,7 @@ import catchAsync from "../utils/catchAsync.js";
 export const login = catchAsync(async (req, res, next) => {
   const { username, password } = req.body;
 
-  const user = await User.findOne({ where: { username } });
+  const user = await User.findOne({ username });
 
   if (!user) {
     const error = new Error("User not found");
@@ -37,6 +38,16 @@ export const login = catchAsync(async (req, res, next) => {
     { expiresIn: "24h" },
   );
 
+  if (user.role === 'Cashier') {
+    await LoginAuditLog.create({
+      user: user._id,
+      role: user.role,
+      action: 'LOGIN',
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+  }
+
   res.status(200).json({
     id: user.id,
     username: user.username,
@@ -52,7 +63,7 @@ export const registerAdmin = catchAsync(async (req, res, next) => {
   const { username, password } = req.body;
 
   // Check if admin already exists to prevent multiple admins
-  const existingAdmin = await User.findOne({ where: { role: "Admin" } });
+  const existingAdmin = await User.findOne({ role: "Admin" });
   if (existingAdmin) {
     const error = new Error(
       "An admin already exists. Cannot register another.",
